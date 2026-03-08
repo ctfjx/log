@@ -158,15 +158,17 @@ func (f *FileHandler) logRotater(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-
 		case <-ticker.C:
-			maxFilesize := f.GetMaxFileSize()
-			maxFilesArchived := f.GetMaxFilesArchived()
+			f.muFile.Lock()
+
+			maxFilesize := f.maxFileSize
+			maxFilesArchived := f.maxFilesArchived
 			if maxFilesize+int64(maxFilesArchived) <= 0 {
+				f.muFile.Unlock()
 				return nil
 			}
 
-			logDir, logFilename := f.GetLogfileLocation()
+			logDir, logFilename := f.getLogfileLocation()
 			logPath := filepath.Join(logDir, logFilename)
 			rotatedName := fmt.Sprintf("%s-%s.gz", logFilename, time.Now().UTC().Format("2006-01-02_15-04-05"))
 			rotatedPath := filepath.Join(logDir, rotatedName)
@@ -174,26 +176,26 @@ func (f *FileHandler) logRotater(ctx context.Context) error {
 			info, err := os.Stat(logPath)
 			if err != nil {
 				if os.IsNotExist(err) {
-					f.muFile.Lock()
 					_, err := f.ensureLogFile()
-					f.muFile.Unlock()
-
 					if err != nil {
+						f.muFile.Unlock()
 						return fmt.Errorf("failed to recreate missing log file, killing rotation: %w", err)
 					}
 
+					f.muFile.Unlock()
 					continue
 				}
 
 				f.wg.Done()
+				f.muFile.Unlock()
 				return fmt.Errorf("failed to stat log file, killing rotation: %w", err)
 			}
 
 			if info.Size() <= maxFilesize {
+				f.muFile.Unlock()
 				continue
 			}
 
-			f.muFile.Lock()
 			original, err := os.Open(filepath.Clean(logPath))
 			if err != nil {
 				f.muFile.Unlock()
@@ -224,10 +226,9 @@ func (f *FileHandler) logRotater(ctx context.Context) error {
 
 			f.muFile.Unlock()
 
-			files := make([]string, 0, f.maxFilesArchived+1)
+			files := make([]string, 0, maxFilesArchived+1)
 			filepath.WalkDir(logDir, func(path string, d fs.DirEntry, err error) error {
-				Warn().Msgf("found log file: %v", path).Send()
-				if err != nil || path != "." {
+				if err != nil || path == "." {
 					return nil
 				}
 
@@ -235,14 +236,15 @@ func (f *FileHandler) logRotater(ctx context.Context) error {
 				if !strings.HasPrefix(fname, logFilename+"-") {
 					return nil
 				}
-				files = append(files, path)
+				files = append(files, fname)
 				return nil
 			})
 
 			slices.Sort(files)
-			excess := len(files) - f.maxFilesArchived
+			excess := len(files) - maxFilesArchived
 			if excess < 0 {
-				return nil
+				f.muFile.Unlock()
+				continue
 			}
 
 			toCut := files[:excess]
