@@ -151,7 +151,7 @@ func newFileHandler(path string) *FileHandler {
 }
 
 func (f *FileHandler) logRotater(ctx context.Context) error {
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 
 	for {
