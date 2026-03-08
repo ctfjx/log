@@ -227,7 +227,7 @@ func (f *FileHandler) logRotater(ctx context.Context) error {
 			f.muFile.Unlock()
 
 			files := make([]string, 0, maxFilesArchived+1)
-			filepath.WalkDir(logDir, func(path string, d fs.DirEntry, err error) error {
+			err = filepath.WalkDir(logDir, func(path string, d fs.DirEntry, err error) error {
 				if err != nil || path == "." {
 					return nil
 				}
@@ -239,6 +239,11 @@ func (f *FileHandler) logRotater(ctx context.Context) error {
 				files = append(files, fname)
 				return nil
 			})
+			if err != nil {
+				Error().Msgf("failed to walk log directory: %v", err)
+				f.muFile.Unlock()
+				continue
+			}
 
 			slices.Sort(files)
 			excess := len(files) - maxFilesArchived
