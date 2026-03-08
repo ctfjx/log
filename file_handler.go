@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -82,10 +84,11 @@ type FileHandler struct {
 
 	muFile sync.Mutex // covers filePtr and logCh
 
-	logDir      string
-	logFilename string
-	filePtr     *os.File
-	maxFileSize int64 // exceeding this size will trigger log rotation. defaults to 10MB. set to 0 to disable
+	logDir           string
+	logFilename      string
+	filePtr          *os.File
+	maxFileSize      int64 // exceeding this size will trigger log rotation. defaults to 10MB. set to 0 to disable
+	maxFilesArchived int   // deletes older files. defaults to 10.
 
 	release   func() bool // returns true if the handler is no longer in use
 	onRelease func()
@@ -148,7 +151,7 @@ func newFileHandler(path string) *FileHandler {
 }
 
 func (f *FileHandler) logRotater(ctx context.Context) error {
-	ticker := time.NewTicker(time.Minute)
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -158,7 +161,8 @@ func (f *FileHandler) logRotater(ctx context.Context) error {
 
 		case <-ticker.C:
 			maxFilesize := f.GetMaxFileSize()
-			if maxFilesize == 0 {
+			maxFilesArchived := f.GetMaxFilesArchived()
+			if maxFilesize+int64(maxFilesArchived) <= 0 {
 				return nil
 			}
 
@@ -219,6 +223,34 @@ func (f *FileHandler) logRotater(ctx context.Context) error {
 			}
 
 			f.muFile.Unlock()
+
+			files := make([]string, 0, f.maxFilesArchived+1)
+			filepath.WalkDir(logDir, func(path string, d fs.DirEntry, err error) error {
+				Warn().Msgf("found log file: %v", path).Send()
+				if err != nil || path != "." {
+					return nil
+				}
+
+				fname := filepath.Base(path)
+				if !strings.HasPrefix(fname, logFilename+"-") {
+					return nil
+				}
+				files = append(files, path)
+				return nil
+			})
+
+			slices.Sort(files)
+			excess := len(files) - f.maxFilesArchived
+			if excess < 0 {
+				return nil
+			}
+
+			toCut := files[:excess]
+			for _, p := range toCut {
+				if err := os.Remove(p); err != nil {
+					Error().Msgf("failed to remove old log file: %v", err).Send()
+				}
+			}
 		}
 	}
 }
@@ -239,10 +271,22 @@ func (f *FileHandler) SetMaxFileSize(size int64) {
 	f.mu.Unlock()
 }
 
+func (f *FileHandler) SetMaxFileArchives(amt int) {
+	f.mu.Lock()
+	f.maxFilesArchived = amt
+	f.mu.Unlock()
+}
+
 func (f *FileHandler) GetMaxFileSize() int64 {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	return f.maxFileSize
+}
+
+func (f *FileHandler) GetMaxFilesArchived() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.maxFilesArchived
 }
 
 func (f *FileHandler) SetLogfileLocation(dir, base string) error {
