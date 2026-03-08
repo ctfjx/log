@@ -5,8 +5,9 @@ import "io"
 type (
 	LoggerBuilder struct {
 		LoggerMeta
-		path           string
-		maxLogFileSize int64 // set to 0 to disable rotations
+		path            string
+		maxLogFileSize  int64 // set to 0 to disable rotations
+		maxFileArchives int   // set to 0 to disable rotations
 	}
 
 	LoggerMeta struct {
@@ -51,8 +52,20 @@ func (lb *LoggerBuilder) Build() (*Logger, error) {
 			if lb.maxLogFileSize < 0 {
 				return nil, ErrInvalidMaxFileSize
 			}
+			fh.SetMaxFileSize(lb.maxLogFileSize)
 		}
-		fh.SetMaxFileSize(lb.maxLogFileSize)
+
+		switch lb.maxFileArchives {
+		case 0:
+			fh.SetMaxFileArchives(10)
+		case -1:
+			fh.SetMaxFileArchives(0)
+		default:
+			if lb.maxFileArchives < 0 {
+				return nil, ErrInvalidMaxFileArchives
+			}
+			fh.SetMaxFileArchives(lb.maxFileArchives)
+		}
 
 		lb.handlers = append(lb.handlers, fh)
 		lb.path = ""
@@ -81,9 +94,11 @@ func (lb *LoggerBuilder) Name(name string) *LoggerBuilder { lb.name = name; retu
 
 // path is the path to the log file
 // maxLogFileSize is the maximum size of the log file in bytes before it is rotated (set to -1 to disable rotations)
-func (lb *LoggerBuilder) WithFile(path string, maxLogFileSize int64) *LoggerBuilder {
+// maxArchives is the maximum number of log files to keep (set to -1 to disable rotations)
+func (lb *LoggerBuilder) WithFile(path string, maxLogFileSize int64, maxArchives int) *LoggerBuilder {
 	lb.path = path
 	lb.maxLogFileSize = maxLogFileSize
+	lb.maxFileArchives = maxArchives
 	return lb
 }
 

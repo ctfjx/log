@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -82,10 +84,11 @@ type FileHandler struct {
 
 	muFile sync.Mutex // covers filePtr and logCh
 
-	logDir      string
-	logFilename string
-	filePtr     *os.File
-	maxFileSize int64 // exceeding this size will trigger log rotation. defaults to 10MB. set to 0 to disable
+	logDir           string
+	logFilename      string
+	filePtr          *os.File
+	maxFileSize      int64 // exceeding this size will trigger log rotation. defaults to 10MB. set to 0 to disable
+	maxFilesArchived int   // deletes older files. defaults to 10.
 
 	release   func() bool // returns true if the handler is no longer in use
 	onRelease func()
@@ -148,21 +151,24 @@ func newFileHandler(path string) *FileHandler {
 }
 
 func (f *FileHandler) logRotater(ctx context.Context) error {
-	ticker := time.NewTicker(time.Minute)
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-
 		case <-ticker.C:
-			maxFilesize := f.GetMaxFileSize()
-			if maxFilesize == 0 {
+			f.muFile.Lock()
+
+			maxFilesize := f.maxFileSize
+			maxFilesArchived := f.maxFilesArchived
+			if maxFilesize+int64(maxFilesArchived) <= 0 {
+				f.muFile.Unlock()
 				return nil
 			}
 
-			logDir, logFilename := f.GetLogfileLocation()
+			logDir, logFilename := f.getLogfileLocation()
 			logPath := filepath.Join(logDir, logFilename)
 			rotatedName := fmt.Sprintf("%s-%s.gz", logFilename, time.Now().UTC().Format("2006-01-02_15-04-05"))
 			rotatedPath := filepath.Join(logDir, rotatedName)
@@ -170,26 +176,26 @@ func (f *FileHandler) logRotater(ctx context.Context) error {
 			info, err := os.Stat(logPath)
 			if err != nil {
 				if os.IsNotExist(err) {
-					f.muFile.Lock()
 					_, err := f.ensureLogFile()
-					f.muFile.Unlock()
-
 					if err != nil {
+						f.muFile.Unlock()
 						return fmt.Errorf("failed to recreate missing log file, killing rotation: %w", err)
 					}
 
+					f.muFile.Unlock()
 					continue
 				}
 
 				f.wg.Done()
+				f.muFile.Unlock()
 				return fmt.Errorf("failed to stat log file, killing rotation: %w", err)
 			}
 
 			if info.Size() <= maxFilesize {
+				f.muFile.Unlock()
 				continue
 			}
 
-			f.muFile.Lock()
 			original, err := os.Open(filepath.Clean(logPath))
 			if err != nil {
 				f.muFile.Unlock()
@@ -219,6 +225,39 @@ func (f *FileHandler) logRotater(ctx context.Context) error {
 			}
 
 			f.muFile.Unlock()
+
+			files := make([]string, 0, maxFilesArchived+1)
+			err = filepath.WalkDir(logDir, func(path string, d fs.DirEntry, err error) error {
+				if err != nil || path == "." {
+					return nil
+				}
+
+				fname := filepath.Base(path)
+				if !strings.HasPrefix(fname, logFilename+"-") {
+					return nil
+				}
+				files = append(files, fname)
+				return nil
+			})
+			if err != nil {
+				Error().Msgf("failed to walk log directory: %v", err)
+				f.muFile.Unlock()
+				continue
+			}
+
+			slices.Sort(files)
+			excess := len(files) - maxFilesArchived
+			if excess < 0 {
+				f.muFile.Unlock()
+				continue
+			}
+
+			toCut := files[:excess]
+			for _, p := range toCut {
+				if err := os.Remove(p); err != nil {
+					Error().Msgf("failed to remove old log file: %v", err).Send()
+				}
+			}
 		}
 	}
 }
@@ -239,10 +278,22 @@ func (f *FileHandler) SetMaxFileSize(size int64) {
 	f.mu.Unlock()
 }
 
+func (f *FileHandler) SetMaxFileArchives(amt int) {
+	f.mu.Lock()
+	f.maxFilesArchived = amt
+	f.mu.Unlock()
+}
+
 func (f *FileHandler) GetMaxFileSize() int64 {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	return f.maxFileSize
+}
+
+func (f *FileHandler) GetMaxFilesArchived() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.maxFilesArchived
 }
 
 func (f *FileHandler) SetLogfileLocation(dir, base string) error {

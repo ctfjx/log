@@ -62,7 +62,7 @@ func TestFileHandlerWritesToFile(t *testing.T) {
 		WithLevel(log.INFO).
 		WithStderr(false).
 		WithStdout(false).
-		WithFile(tmpfile.Name(), 0).
+		WithFile(tmpfile.Name(), 0, 0).
 		Build()
 	require.NoError(t, err)
 	require.NoError(t, l.Start(), "failed to start logger")
