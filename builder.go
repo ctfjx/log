@@ -51,8 +51,8 @@ func (lb *LoggerBuilder) Build() (*Logger, error) {
 			if lb.maxLogFileSize < 0 {
 				return nil, ErrInvalidMaxFileSize
 			}
+			fh.SetMaxFileSize(lb.maxLogFileSize)
 		}
-		fh.SetMaxFileSize(lb.maxLogFileSize)
 
 		lb.handlers = append(lb.handlers, fh)
 		lb.path = ""
