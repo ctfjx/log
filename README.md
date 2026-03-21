@@ -64,7 +64,7 @@ go get -u github.com/LatteSec/log@latest
 import "github.com/LatteSec/log"
 
 func main() {
-  defer log.Close()
+  defer log.Sync()
 
   // Use it straight away with a default logger
   log.Info().Msg("Hello, World!").Send()

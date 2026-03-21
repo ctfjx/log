@@ -1,3 +1,34 @@
+// Package log is an extensible logging library
+//
+// We use the concept of "loggers sharing handlers" to enable
+// more efficient use of resources for complex asynchronous
+// logging needs.
+//
+// Usage:
+//
+//	import "github.com/LatteSec/log"
+//
+//	func main() {
+//	  defer log.Sync()
+//
+//	  // Use it straight away with a default logger
+//	  log.Info().Msg("Hello, World!").Send()
+//	  log.Log(log.INFO).Msg("Hello, World!").Send()
+//
+//	  // or create a logger
+//	  logger, _ := log.NewLogger().
+//	              Name("my-logger").
+//	              Level(log.INFO).
+//	              Build()
+//
+//	  _ = logger.Start()
+//	  logger.Info().Msg("Hello from custom logger!").Send()
+//	  logger.Log(log.INFO).Msg("Hello from custom logger!").Send()
+//
+//	  // and you can register it to the global logger too!
+//	  log.Register(logger)
+//	}
+//	```
 package log
 
 import (
@@ -29,6 +60,8 @@ var (
 	DefaultStdoutHandler atomic.Pointer[WriterHandler]
 	DefaultStderrHandler atomic.Pointer[WriterHandler]
 
+	handleInterrupts atomic.Bool
+
 	ErrNotStarted                = errors.New("not started")
 	ErrAlreadyStarted            = errors.New("already started")
 	ErrInvalidLogHandler         = errors.New("invalid log handler")
@@ -41,6 +74,7 @@ var (
 )
 
 func init() {
+	handleInterrupts.Store(true)
 	go handleSigint()
 
 	if err := RegisterStdoutHandler(NewWriterHandler(os.Stdout)); err != nil {
@@ -69,6 +103,14 @@ func DefaultLogger() *Logger {
 	logger.Info().Msg("default logger started").Send()
 
 	return logger
+}
+
+// SetInterruptHandler enables or disables the SIGINT/TERM handler
+//
+// Please only disable this if you plan to implement your own handler.
+// You can use [Sync] to handle cleanup on interrupt.
+func SetInterruptHandler(enabled bool) {
+	handleInterrupts.Store(enabled)
 }
 
 func Sync() {
