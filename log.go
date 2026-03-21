@@ -29,6 +29,8 @@ var (
 	DefaultStdoutHandler atomic.Pointer[WriterHandler]
 	DefaultStderrHandler atomic.Pointer[WriterHandler]
 
+	handleInterrupts atomic.Bool
+
 	ErrNotStarted                = errors.New("not started")
 	ErrAlreadyStarted            = errors.New("already started")
 	ErrInvalidLogHandler         = errors.New("invalid log handler")
@@ -41,6 +43,7 @@ var (
 )
 
 func init() {
+	handleInterrupts.Store(true)
 	go handleSigint()
 
 	if err := RegisterStdoutHandler(NewWriterHandler(os.Stdout)); err != nil {
@@ -69,6 +72,14 @@ func DefaultLogger() *Logger {
 	logger.Info().Msg("default logger started").Send()
 
 	return logger
+}
+
+// SetInterruptHandler enables or disables the SIGINT/TERM handler
+//
+// Please only disable this if you plan to implement your own handler.
+// You can use [Sync] to handle cleanup on interrupt.
+func SetInterruptHandler(enabled bool) {
+	handleInterrupts.Store(enabled)
 }
 
 func Sync() {
